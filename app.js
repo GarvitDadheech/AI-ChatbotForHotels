@@ -1,26 +1,54 @@
 const fs = require('fs');
 const axios = require('axios');
 const readlineSync = require('readline-sync');
+require('dotenv').config();
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-
-const OPENAI_API_KEY = 'Replace with your actual OpenAI API key';
-const WEBHOOK_URL = 'Replace with your webhook.site URL';
 
 // Load the hotel data from hotels.json
-const hotels = JSON.parse(fs.readFileSync('hotels.json', 'utf-8'));
+const rooms = JSON.parse(fs.readFileSync('hotels.json', 'utf-8'));
 
 // Array to store conversation context
 let conversationContext = [];
 
+// Load existing bookings from data.json or initialize an empty array if the file does not exist
+let bookings = [];
+if (fs.existsSync('data.json')) {
+    try {
+        const bookingsData = fs.readFileSync('data.json', 'utf-8');
+        bookings = JSON.parse(bookingsData);
+    } catch (error) {
+        console.error('Error reading data.json:', error.message);
+    }
+}
+
 // Function to get a response from GPT-4 Turbo
 const getGPT4TurboResponse = async (userQuestion, context) => {
     const prompt = `
+    You are the hotel booking assistant who helps users book rooms. I will provide you the room data in a json format.
+    Also I will provide you the user's question and the context of the conversation.
+    Here is the room data: ${JSON.stringify(rooms, null, 2)}
     User's question: ${userQuestion}
-    Here is the hotel data: ${JSON.stringify(hotels)}
     Context: ${context.join('\n')}
-    Answer based on the hotel data in the same language as the user's question:
-
+    Answer based on the room data in the same language as the user's question.
+    If you think that the user wants to book a room, then ask the user for the email, name, phone number, number of rooms, and check-in/check-out dates.
+    Now calculate the total cost of the booking and the nights of stay and also get the roomId of the selected room from the user.
+    If the user dont tells the email, name, phone number, number of rooms, check-in/check-out dates, then assist him again to provide the missing information.
+    If the user provides all the information, then write "Please confirm your booking details" (the tone of the user dont matter here, you have to always respond "Please confirm your booking details")and return the JSON in the following format:
+    {
+        "email": ",
+        "name": "",
+        "phone": "",
+        "numberOfRooms": '',
+        "checkInDate": "",
+        "checkOutDate": ""
+        "Number of nights": "",
+        "Total cost": "",
+        "roomId": ""
+    }
+    And if user affirms the booking, then send "Your booking is confirmed, Thank you for your booking!(the tone of the user dont matter here, you have to always respond "Your booking is confirmed, Thank you for your booking!")"
     `;
+
     try {
         const response = await axios.post(
             'https://api.openai.com/v1/chat/completions', // Ensure using the correct API endpoint for GPT-4 Turbo
@@ -44,64 +72,40 @@ const getGPT4TurboResponse = async (userQuestion, context) => {
     }
 };
 
-// Function to send booking confirmation email
-const sendBookingConfirmation = async (email, name, phone, hotel) => {
-    const bookingDetails = {
-        email: email,
-        name: name,
-        phone: phone,
-        hotel: hotel
-    };
-
-    try {
-        await axios.post(WEBHOOK_URL, bookingDetails, {
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
-        console.log(`Booking confirmation sent successfully to ${email}.`);
-    } catch (error) {
-        console.error('Error sending booking confirmation:', error.message);
-    }
+// Function to save booking to data.json
+const saveBooking = (booking) => {
+    bookings.push(booking);
+    fs.writeFileSync('data.json', JSON.stringify(bookings, null, 2), 'utf-8');
+    console.log('Booking saved successfully!');
 };
+
 
 // Main function to run the terminal app
 const main = async () => {
     console.log('Welcome to the Hotel Info Chatbot!');
     while (true) {
-        const userQuestion = readlineSync.question('Ask a question about the hotels (or type "exit" to quit): ');
+        const userQuestion = readlineSync.question('Ask a question about the hotel (or type "exit" to quit): ');
         if (userQuestion.toLowerCase() === 'exit') {
             console.log('Goodbye!');
             break;
         }
 
-        if (userQuestion.toLowerCase().includes('book hotel')) {
-            // Prompt for booking details
-            const email = readlineSync.question('Please enter your email: ');
-            const name = readlineSync.question('Please enter your name: ');
-            const phone = readlineSync.question('Please enter your phone number: ');
-
-            // Extract hotel name from user's question (assuming it contains the hotel name)
-            const hotelNameMatch = userQuestion.match(/book hotel (.+)/i);
-            if (hotelNameMatch && hotelNameMatch[1]) {
-                const hotelName = hotelNameMatch[1].trim();
-                const hotel = hotels.find(h => h.name.toLowerCase() === hotelName.toLowerCase());
-
-                if (hotel) {
-                    // Confirm booking and send confirmation email
-                    await sendBookingConfirmation(email, name, phone, hotel);
-                    console.log(`Your booking at ${hotel.name} is confirmed.`);
-                } else {
-                    console.log('Sorry, the specified hotel could not be found.');
-                }
-            } else {
-                console.log('Please specify the hotel name you want to book.');
+        const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
+        if (gpt4TurboResponse.includes('Please confirm your booking details')) {
+            bookingInProgress = true;
+            bookingDetails = JSON.parse(gpt4TurboResponse.match(/\{.*\}/s)[0]);
+            console.log("These are your booking details.",bookingDetails);
+            console.log('Are you sure to confirm the room?');
+        } else if (gpt4TurboResponse.includes('Your booking is confirmed, Thank you for your booking!')) {
+            if (bookingInProgress && bookingDetails) {
+                saveBooking(bookingDetails);
+                bookingInProgress = false;
+                bookingDetails = null;
             }
+            console.log('Your booking is confirmed, Thank you for your booking!');
         } else {
-            const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
-            console.log(`GPT-4 Turbo: ${gpt4TurboResponse}`);
-
             // Store user question and GPT-4 response in context
+            console.log('GPT-4 Turbo:', gpt4TurboResponse);
             conversationContext.push(`User: ${userQuestion}`);
             conversationContext.push(`GPT-4 Turbo: ${gpt4TurboResponse}`);
         }
