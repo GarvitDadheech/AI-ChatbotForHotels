@@ -11,23 +11,20 @@ const { sequelize, testConnection } = require('./sequelize');
 const Conversation = require('./Conversation');
 const Booking = require('./Booking');
 app.use(express.json());
-// Test the database connection
+
+
 testConnection().then(() => {
-    // Start your application logic here
     console.log('Database connection test completed.');
-    // Call your main function or set up Express routes here
 }).catch((error) => {
     console.error('Error testing database connection:', error);
 });
 
 
-// Load the hotel data from hotels.json
 const rooms = JSON.parse(fs.readFileSync('hotels.json', 'utf-8'));
 
-// Array to store conversation context
+
 let conversationContext = [];
 
-// Load existing bookings from data.json or initialize an empty array if the file does not exist
 let bookings = [];
 if (fs.existsSync('data.json')) {
     try {
@@ -42,7 +39,7 @@ if (fs.existsSync('data.json')) {
     }
 }
 
-// Function to get a response from GPT-4 Turbo
+
 const getGPT4TurboResponse = async (userQuestion, context) => {
     const prompt = `
     You are the hotel booking assistant who helps users book rooms. I will provide you the room data in a json format.
@@ -92,7 +89,7 @@ const getGPT4TurboResponse = async (userQuestion, context) => {
     }
 };
 
-// Function to save booking to data.json
+
 const saveBooking = async (bookingDetails) => {
     try {
       const newBooking = await Booking.create(bookingDetails);
@@ -103,45 +100,60 @@ const saveBooking = async (bookingDetails) => {
   };
 
 
-// Main function to run the terminal application
 
-const main = async (userQuestion, conversationId) => {
-  let conversation;
+  const main = async (userQuestion, conversationId) => {
+    let conversation;
 
-  try {
-    conversation = await Conversation.findOne({ where: { conversationId } });
-    if (!conversation) {
-      conversation = await Conversation.create({ conversationId, messages: [] });
+    try {
+        conversation = await Conversation.findOne({ where: { conversationId } });
+        if (!conversation) {
+            conversation = await Conversation.create({ conversationId, messages: [] });
+        }
+    } catch (error) {
+        console.error('Error fetching/creating conversation:', error);
+        return 'Error fetching/creating conversation.';
     }
-  } catch (error) {
-    console.error('Error fetching/creating conversation:', error);
-    return 'Error fetching/creating conversation.';
-  }
 
-  conversationContext = conversation.messages.map(msg => msg.text);
+    conversationContext = conversation.messages.map(msg => msg.text);
 
-  const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
+    const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
 
-  if (gpt4TurboResponse.includes('Sorry, I could not get the response from OpenAI.')) {
-    return "Sorry, Our servers are down, Please try again in sometime.";
-  }
+    if (gpt4TurboResponse.includes('Sorry, I could not get the response from OpenAI.')) {
+        return "Sorry, Our servers are down, Please try again after sometime.";
+    }
 
-  if (gpt4TurboResponse.includes('Please confirm your booking details')) {
-    const bookingDetails = JSON.parse(gpt4TurboResponse.match(/\{.*\}/s)[0]);
-    console.log("These are your booking details:", bookingDetails);
-    console.log('Are you sure to confirm the room?');
-    // Handle booking confirmation here if needed
-  } else if (gpt4TurboResponse.includes('Your booking is confirmed, Thank you for your booking!')) {
-    // Handle booking confirmed case here if needed
-    console.log('Your booking is confirmed, Thank you for your booking!');
-  } else {
-    // Store user question and GPT-4 response in context
-    conversation.messages.push({ sender: 'user', text: userQuestion });
-    conversation.messages.push({ sender: 'assistant', text: gpt4TurboResponse });
-    await conversation.save();
-  }
+    if (gpt4TurboResponse.includes('Please confirm your booking details')) {
+        const bookingDetails = JSON.parse(gpt4TurboResponse.match(/\{.*\}/s)[0]);
+        console.log("These are your booking details:", bookingDetails);
+        console.log('Are you sure to confirm the room?');
 
-  return gpt4TurboResponse;
+        conversation.messages.push({ sender: 'user', text: userQuestion });
+        conversation.messages.push({ sender: 'assistant', text: gpt4TurboResponse });
+        conversation.messages.push({ sender: 'system', text: JSON.stringify(bookingDetails) });
+        await conversation.save();
+
+    } else if (gpt4TurboResponse.includes('Your booking is confirmed, Thank you for your booking!')) {
+        const lastMessage = conversation.messages[conversation.messages.length - 1];
+        let bookingDetails;
+        try {
+            bookingDetails = JSON.parse(lastMessage.text);
+        } catch (error) {
+            console.error('Error parsing booking details:', error);
+            return 'Error parsing booking details.';
+        }
+
+        await saveBooking(bookingDetails);
+
+        conversation.messages.push({ sender: 'user', text: userQuestion });
+        conversation.messages.push({ sender: 'assistant', text: gpt4TurboResponse });
+        await conversation.save();
+    } else {
+        conversation.messages.push({ sender: 'user', text: userQuestion });
+        conversation.messages.push({ sender: 'assistant', text: gpt4TurboResponse });
+        await conversation.save();
+    }
+
+    return gpt4TurboResponse;
 };
 
 app.post('/chat', async (req, res) => {
@@ -149,14 +161,14 @@ app.post('/chat', async (req, res) => {
   
   const response = await main(text, conversationId);
   
-  // Fetch the updated conversation to return it in the response
+  
   const conversation = await Conversation.findOne({ where: { conversationId } });
   
   res.json({ response, conversation });
 });
 
 
-  // Start server
+  
 const PORT = 3001;
 sequelize.sync().then(async () => {
   await testConnection();
