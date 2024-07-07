@@ -1,8 +1,22 @@
 const fs = require('fs');
 const axios = require('axios');
 const readlineSync = require('readline-sync');
+const express = require('express');
+const app = express();
 require('dotenv').config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const cors = require('cors');
+app.use(cors());
+const { sequelize, testConnection } = require('./sequelize');
+app.use(express.json());
+// Test the database connection
+testConnection().then(() => {
+    // Start your application logic here
+    console.log('Database connection test completed.');
+    // Call your main function or set up Express routes here
+}).catch((error) => {
+    console.error('Error testing database connection:', error);
+});
 
 
 // Load the hotel data from hotels.json
@@ -16,7 +30,11 @@ let bookings = [];
 if (fs.existsSync('data.json')) {
     try {
         const bookingsData = fs.readFileSync('data.json', 'utf-8');
-        bookings = JSON.parse(bookingsData);
+        if (bookingsData.trim() !== '') {
+            bookings = JSON.parse(bookingsData);
+        } else {
+            console.log('data.json is empty.');
+        }
     } catch (error) {
         console.error('Error reading data.json:', error.message);
     }
@@ -73,44 +91,65 @@ const getGPT4TurboResponse = async (userQuestion, context) => {
 };
 
 // Function to save booking to data.json
-const saveBooking = (booking) => {
-    bookings.push(booking);
-    fs.writeFileSync('data.json', JSON.stringify(bookings, null, 2), 'utf-8');
-    console.log('Booking saved successfully!');
-};
+const saveBooking = async (bookingDetails) => {
+    try {
+      const newBooking = await Booking.create(bookingDetails);
+      console.log('Booking saved successfully:', newBooking.toJSON());
+    } catch (error) {
+      console.error('Error saving booking:', error);
+    }
+  };
 
 
 // Main function to run the terminal app
-const main = async () => {
-    console.log('Welcome to the Hotel Info Chatbot!');
-    while (true) {
-        const userQuestion = readlineSync.question('Ask a question about the hotel (or type "exit" to quit): ');
-        if (userQuestion.toLowerCase() === 'exit') {
-            console.log('Goodbye!');
-            break;
-        }
+const Booking = require('./Booking');
 
-        const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
-        if (gpt4TurboResponse.includes('Please confirm your booking details')) {
-            bookingInProgress = true;
-            bookingDetails = JSON.parse(gpt4TurboResponse.match(/\{.*\}/s)[0]);
-            console.log("These are your booking details.",bookingDetails);
-            console.log('Are you sure to confirm the room?');
-        } else if (gpt4TurboResponse.includes('Your booking is confirmed, Thank you for your booking!')) {
-            if (bookingInProgress && bookingDetails) {
-                saveBooking(bookingDetails);
-                bookingInProgress = false;
-                bookingDetails = null;
-            }
-            console.log('Your booking is confirmed, Thank you for your booking!');
-        } else {
-            // Store user question and GPT-4 response in context
-            console.log('GPT-4 Turbo:', gpt4TurboResponse);
-            conversationContext.push(`User: ${userQuestion}`);
-            conversationContext.push(`GPT-4 Turbo: ${gpt4TurboResponse}`);
-        }
+const main = async (userQuestion) => {
+  console.log('Welcome to the Hotel Info Chatbot!');
+  while (true) {
+    if (userQuestion.toLowerCase() === 'exit') {
+      console.log('Goodbye!');
+      break;
     }
+
+    const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
+    if(gpt4TurboResponse.includes('Sorry, I could not get the response from OpenAI.')){
+        console.log('Sorry, I could not get the response from OpenAI.');
+        break;
+    }
+    if (gpt4TurboResponse.includes('Please confirm your booking details')) {
+      bookingInProgress = true;
+      bookingDetails = JSON.parse(gpt4TurboResponse.match(/\{.*\}/s)[0]);
+      console.log("These are your booking details:", bookingDetails);
+      console.log('Are you sure to confirm the room?');
+    } else if (gpt4TurboResponse.includes('Your booking is confirmed, Thank you for your booking!')) {
+      if (bookingInProgress && bookingDetails) {
+        saveBooking(bookingDetails);
+        bookingInProgress = false;
+        bookingDetails = null;
+      }
+      console.log('Your booking is confirmed, Thank you for your booking!');
+    } else {
+      // Store user question and GPT-4 response in context
+      console.log('GPT-4 Turbo:', gpt4TurboResponse);
+      conversationContext.push(`User: ${userQuestion}`);
+      conversationContext.push(`GPT-4 Turbo: ${gpt4TurboResponse}`);
+    }
+  }
 };
 
-// Run the main function
-main();
+app.post('/chat', async (req, res) => {
+    console.log('Received request:', req.body);
+    const { text } = req.body;
+    const response = await main(text);
+    res.json({ response });
+  });
+
+  // Start server
+const PORT = 3001;
+sequelize.sync().then(async () => {
+  await testConnection();
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+});
