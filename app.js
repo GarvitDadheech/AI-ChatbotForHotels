@@ -8,6 +8,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const cors = require('cors');
 app.use(cors());
 const { sequelize, testConnection } = require('./sequelize');
+const Conversation = require('./Conversation');
+const Booking = require('./Booking');
 app.use(express.json());
 // Test the database connection
 testConnection().then(() => {
@@ -101,48 +103,58 @@ const saveBooking = async (bookingDetails) => {
   };
 
 
-// Main function to run the terminal app
-const Booking = require('./Booking');
+// Main function to run the terminal application
 
-const main = async (userQuestion) => {
-  console.log('Welcome to the Hotel Info Chatbot!');
-  while (true) {
-    if (userQuestion.toLowerCase() === 'exit') {
-      console.log('Goodbye!');
-      break;
-    }
+const main = async (userQuestion, conversationId) => {
+  let conversation;
 
-    const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
-    if(gpt4TurboResponse.includes('Sorry, I could not get the response from OpenAI.')){
-        return "Sorry, I could not get the response from OpenAI."
+  try {
+    conversation = await Conversation.findOne({ where: { conversationId } });
+    if (!conversation) {
+      conversation = await Conversation.create({ conversationId, messages: [] });
     }
-    if (gpt4TurboResponse.includes('Please confirm your booking details')) {
-      bookingInProgress = true;
-      bookingDetails = JSON.parse(gpt4TurboResponse.match(/\{.*\}/s)[0]);
-      console.log("These are your booking details:", bookingDetails);
-      console.log('Are you sure to confirm the room?');
-    } else if (gpt4TurboResponse.includes('Your booking is confirmed, Thank you for your booking!')) {
-      if (bookingInProgress && bookingDetails) {
-        saveBooking(bookingDetails);
-        bookingInProgress = false;
-        bookingDetails = null;
-      }
-      console.log('Your booking is confirmed, Thank you for your booking!');
-    } else {
-      // Store user question and GPT-4 response in context
-      console.log('GPT-4 Turbo:', gpt4TurboResponse);
-      conversationContext.push(`User: ${userQuestion}`);
-      conversationContext.push(`GPT-4 Turbo: ${gpt4TurboResponse}`);
-    }
+  } catch (error) {
+    console.error('Error fetching/creating conversation:', error);
+    return 'Error fetching/creating conversation.';
   }
+
+  conversationContext = conversation.messages.map(msg => msg.text);
+
+  const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
+
+  if (gpt4TurboResponse.includes('Sorry, I could not get the response from OpenAI.')) {
+    return "Sorry, Our servers are down, Please try again in sometime.";
+  }
+
+  if (gpt4TurboResponse.includes('Please confirm your booking details')) {
+    const bookingDetails = JSON.parse(gpt4TurboResponse.match(/\{.*\}/s)[0]);
+    console.log("These are your booking details:", bookingDetails);
+    console.log('Are you sure to confirm the room?');
+    // Handle booking confirmation here if needed
+  } else if (gpt4TurboResponse.includes('Your booking is confirmed, Thank you for your booking!')) {
+    // Handle booking confirmed case here if needed
+    console.log('Your booking is confirmed, Thank you for your booking!');
+  } else {
+    // Store user question and GPT-4 response in context
+    conversation.messages.push({ sender: 'user', text: userQuestion });
+    conversation.messages.push({ sender: 'assistant', text: gpt4TurboResponse });
+    await conversation.save();
+  }
+
+  return gpt4TurboResponse;
 };
 
 app.post('/chat', async (req, res) => {
-    console.log('Received request:', req.body);
-    const { text } = req.body;
-    const response = await main(text);
-    res.json({ response });
-  });
+  const { text, conversationId } = req.body;
+  
+  const response = await main(text, conversationId);
+  
+  // Fetch the updated conversation to return it in the response
+  const conversation = await Conversation.findOne({ where: { conversationId } });
+  
+  res.json({ response, conversation });
+});
+
 
   // Start server
 const PORT = 3001;
