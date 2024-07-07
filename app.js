@@ -114,8 +114,7 @@ const main = async (userQuestion) => {
 
     const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
     if(gpt4TurboResponse.includes('Sorry, I could not get the response from OpenAI.')){
-        console.log('Sorry, I could not get the response from OpenAI.');
-        break;
+        return "Sorry, I could not get the response from OpenAI."
     }
     if (gpt4TurboResponse.includes('Please confirm your booking details')) {
       bookingInProgress = true;
