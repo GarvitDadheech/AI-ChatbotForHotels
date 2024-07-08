@@ -13,6 +13,10 @@ const OpenAI = require('openai');
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 app.use(cors());
 app.use(express.json());
+const {GoogleGenerativeAI} = require("@google/generative-ai");
+const genAi = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const API_KEY = process.env.GEMINI_API_KEY; // Set your Gemini API key in .env
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${API_KEY}`;
 
 testConnection().then(() => {
   console.log('Database connection test completed.');
@@ -23,7 +27,7 @@ testConnection().then(() => {
 const rooms = JSON.parse(fs.readFileSync('hotels.json', 'utf-8'));
 
 let conversationContext = [];
-
+let geminiContext = [];
 let bookings = [];
 if (fs.existsSync('data.json')) {
   try {
@@ -177,6 +181,76 @@ const getGPT4TurboResponse = async (userQuestion, context) => {
   }
 };
 
+
+// const getGeminiResponse = async (userQuestion, context) => {
+//   const prompt = `
+//   You are a hotel booking assistant who will showcase different rooms to the users and answer according to their queries only based on the dataset present in the room_data: ${rooms}. Only tell answers from room_data and don't tell extra information. 
+//   Please respond with well-formatted, markdown-enhanced steps.
+//   Also once the user likes a room or wants to book a specific room then ask for the user's email, name, phone number, number of rooms, check-in date, check-out date. 
+//   And then say confirm booking.
+//   this is the room data
+//   [
+//     {"id":1,"name":"Deluxe Room","description":"Spacious room with a king-size bed and city view","price":5000},
+//     {"id":2,"name":"Suite","description":"Luxurious suite with separate living area and mountain view","price":8000},
+//     {"id":3,"name":"Executive Room","description":"Modern room with work desk and high-speed internet","price":6000},
+//     {"id":4,"name":"Family Room","description":"Large room with two queen-size beds, perfect for families","price":7000}
+//     ]
+// `;
+
+// const messages = [
+//   { role: 'system', content: prompt },
+//   ...context,
+//   { role: 'user', content: userQuestion }
+// ];
+
+
+//   const payload = {
+//     contents: messages.map(msg => ({
+//       parts: [{ text: msg.content }]
+//     }))
+//   };
+  
+
+//   try {
+//     const response = await axios.post(GEMINI_API_URL, payload, {
+//       headers: {
+//         'Content-Type': 'application/json'
+//       }
+//     });
+
+//     if (response.status === 200) {
+//       const geminiData = response.data;
+//       const textOutput = geminiData.candidates[0].content.parts[0].text;
+//       return textOutput;
+//     } else {
+//       console.log("jiii");
+//       console.error('Error: Failed to get response from Gemini.');
+//       return "Sorry, our servers are down. Please try again later.";
+//     }
+//   } catch (error) {
+//     console.log("jiii");
+//     console.error('Error:', error.message || error);
+//     return "Sorry, our servers are down. Please try again later.";
+//   }
+// };
+
+const getGeminiResponse = async (userQuestion, context) => {
+  const model = genAi.getGenerativeModel({model: "gemini-pro"});
+  const prompt = `
+  You are a hotel booking assistant who will showcase different rooms to the users and answer according to their queries only based on the dataset present in the room_data: ${rooms}. Only tell answers from room_data and don't tell extra information. 
+  Please respond with well-formatted, markdown-enhanced steps.
+  Also once the user likes a room or wants to book a specific room then ask for the user's email, name, phone number, number of rooms, check-in date, check-out date. 
+  And then say confirm booking. Be professional and polite.
+  Please respond with well-formatted steps. 
+  Room Data: ${JSON.stringify(rooms)}`;
+  let msgs = prompt + "\n" + context.join("\n") + "\n" + userQuestion;
+  const result = await model.generateContent(msgs);
+  const response = await result.response;
+  const text = response.text();
+  return text;
+  
+}
+
 const get_room_data = () => {
   return rooms;
 }
@@ -245,15 +319,18 @@ const main = async (userQuestion, conversationId) => {
 
   conversationContext = conversation.messages.map(msg => msg.text);
 
-  const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
-
+  // const gpt4TurboResponse = await getGPT4TurboResponse(userQuestion, conversationContext);
+  const geminiResponse = await getGeminiResponse(userQuestion, geminiContext);
+  geminiContext.push(geminiResponse);
   if (conversation) {
     conversation.messages.push({ sender: 'user', text: userQuestion });
-    conversation.messages.push({ sender: 'assistant', text: gpt4TurboResponse });
+    // conversation.messages.push({ sender: 'assistant', text: gpt4TurboResponse });
+    conversation.messages.push({ sender: 'assistant', text: geminiResponse });
     await conversation.save();
   }
 
-  return gpt4TurboResponse;
+  // return gpt4TurboResponse;
+  return geminiResponse;
 };
 
 app.post('/api/chat', async (req, res) => {
